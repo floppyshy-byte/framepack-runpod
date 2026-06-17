@@ -6,25 +6,18 @@
 # and land under /runpod-volume/huggingface-cache/hub/ at runtime.
 # ---------------------------------------------------------------------------
 
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM runpod/pytorch:1.0.6-cu1281-torch260-ubuntu2204
 
 WORKDIR /workspace
 
-# System deps for opencv, video encoding, and python
+# System deps for opencv and video encoding
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-pip \
         ffmpeg \
         libgl1-mesa-glx \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# PyTorch + torchvision (CUDA 12.4)
-RUN pip install --no-cache-dir \
-    "torch>=2.6.0" \
-    "torchvision>=0.21.0" \
-    --extra-index-url https://download.pytorch.org/whl/cu124
-
-# Python dependencies
+# Python dependencies (PyTorch already included in base image)
 RUN pip install --no-cache-dir \
     "accelerate==1.6.0" \
     "diffusers==0.33.1" \
