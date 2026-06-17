@@ -52,7 +52,7 @@ def resolve_model_dir():
         return os.path.abspath(explicit)
 
     hf_cache = os.environ.get('HF_HOME', '/runpod-volume/huggingface-cache')
-    cache_repo_dir = os.path.join(hf_cache, 'hub', 'models--Floppyshy--framepack-runpod-cache')
+    cache_repo_dir = os.path.join(hf_cache, 'hub', 'models--floppyshy--framepack-runpod-cache')
     snapshots_dir = os.path.join(cache_repo_dir, 'snapshots')
 
     if os.path.isdir(snapshots_dir):
