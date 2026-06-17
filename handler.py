@@ -34,6 +34,7 @@ import sys
 import base64
 import tempfile
 import traceback
+from runpod.serverless.utils import rp_upload
 
 import numpy as np
 import torch
@@ -367,6 +368,26 @@ def _aes_encrypt_bytes(plaintext: bytes) -> bytes:
     return nonce + ciphertext
 
 
+def _s3_configured() -> bool:
+    """Return True if the base image's S3 uploader is configured."""
+    return bool(os.environ.get("BUCKET_ENDPOINT_URL"))
+
+
+def _upload_to_s3(data: bytes, filename: str, job_id: str) -> str:
+    """Upload bytes via the base image's S3 helper and return the URL."""
+    suffix = os.path.splitext(filename)[1] or ".bin"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+    try:
+        return rp_upload.upload_image(job_id, tmp_path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 def decode_image(image_b64: str) -> np.ndarray:
     """Decode a base64-encoded image string to a numpy array (H, W, C) uint8 RGB."""
     image_bytes = base64.b64decode(image_b64)
@@ -455,7 +476,14 @@ def handler(job):
             # Encrypt output using _aes_encrypt_bytes
             video_bytes = _aes_encrypt_bytes(video_bytes)
 
-        video_b64 = base64.b64encode(video_bytes).decode('utf-8')
+        if _s3_configured():
+            try:
+                job_id = job.get('id') or 'unknown'
+                video_val = _upload_to_s3(video_bytes, 'output.mp4', job_id)
+            except Exception as e:
+                return {'error': f'Failed to upload output to S3: {e}'}
+        else:
+            video_val = base64.b64encode(video_bytes).decode('utf-8')
 
         # Clean up temp file
         try:
@@ -464,7 +492,7 @@ def handler(job):
             pass
 
         res_dict = {
-            'video': video_b64,
+            'video': video_val,
             'seed': seed,
             'duration_seconds': round(total_frames / 30.0, 2),
             'total_frames': total_frames,
