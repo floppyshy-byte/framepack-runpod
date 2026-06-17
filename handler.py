@@ -335,6 +335,36 @@ def generate_video(
 # ---------------------------------------------------------------------------
 
 import runpod
+import secrets
+import json
+
+# AES-256-GCM encryption — enabled when COMFY_ENCRYPTION_KEY is set (64 hex chars)
+_ENCRYPTION_KEY: bytes | None = None
+_RAW_KEY = os.getenv("COMFY_ENCRYPTION_KEY", "")
+if _RAW_KEY:
+    _key_bytes = bytes.fromhex(_RAW_KEY)
+    if len(_key_bytes) != 32:
+        raise RuntimeError(
+            "COMFY_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"
+        )
+    _ENCRYPTION_KEY = _key_bytes
+
+
+def _aes_decrypt(encoded: str) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    data = base64.b64decode(encoded)
+    nonce, ciphertext = data[:12], data[12:]
+    return AESGCM(_ENCRYPTION_KEY).decrypt(nonce, ciphertext, None)
+
+
+def _aes_encrypt_bytes(plaintext: bytes) -> bytes:
+    """Encrypt plaintext bytes and return raw nonce + ciphertext + tag."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    nonce = secrets.token_bytes(12)
+    ciphertext = AESGCM(_ENCRYPTION_KEY).encrypt(nonce, plaintext, None)
+    return nonce + ciphertext
 
 
 def decode_image(image_b64: str) -> np.ndarray:
@@ -347,6 +377,22 @@ def decode_image(image_b64: str) -> np.ndarray:
 def handler(job):
     """RunPod serverless handler entry point."""
     job_input = job['input']
+
+    # Encryption mode: triggered by "encryption": true or "encrypted" field
+    encryption_enabled = (
+        job_input.get("encryption") is True or "encrypted" in job_input
+    )
+    was_fully_encrypted = "encrypted" in job_input
+
+    if encryption_enabled and not _ENCRYPTION_KEY:
+        return {"error": "Encryption is enabled but COMFY_ENCRYPTION_KEY is not set"}
+
+    # Decrypt full payload if it arrived in the "encrypted" field
+    if was_fully_encrypted:
+        try:
+            job_input = json.loads(_aes_decrypt(job_input["encrypted"]))
+        except Exception as exc:
+            return {"error": f"Failed to decrypt job input: {exc}"}
 
     # --- Validate required fields ---
     image_b64 = job_input.get('image')
@@ -401,9 +447,15 @@ def handler(job):
             mp4_crf=mp4_crf,
         )
 
-        # Read and encode output video
+        # Read output video
         with open(output_path, 'rb') as f:
-            video_b64 = base64.b64encode(f.read()).decode('utf-8')
+            video_bytes = f.read()
+
+        if encryption_enabled:
+            # Encrypt output using _aes_encrypt_bytes
+            video_bytes = _aes_encrypt_bytes(video_bytes)
+
+        video_b64 = base64.b64encode(video_bytes).decode('utf-8')
 
         # Clean up temp file
         try:
@@ -411,12 +463,16 @@ def handler(job):
         except OSError:
             pass
 
-        return {
+        res_dict = {
             'video': video_b64,
             'seed': seed,
             'duration_seconds': round(total_frames / 30.0, 2),
             'total_frames': total_frames,
         }
+        if encryption_enabled:
+            res_dict['encrypted'] = True
+
+        return res_dict
 
     except Exception as e:
         traceback.print_exc()
