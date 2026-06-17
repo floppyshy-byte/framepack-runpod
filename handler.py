@@ -356,7 +356,7 @@ def handler(job):
     prompt = job_input.get('prompt', '')
 
     # --- Parse optional parameters with defaults ---
-    negative_prompt = job_input.get('negative_prompt', '')
+    negative_prompt = job_input.get('negative_prompt', job_input.get('n_prompt', ''))
     seed = int(job_input.get('seed', 31337))
     total_second_length = float(job_input.get('total_second_length', 5.0))
     steps = int(job_input.get('steps', 25))
@@ -365,12 +365,19 @@ def handler(job):
     use_teacache = bool(job_input.get('use_teacache', True))
     mp4_crf = int(job_input.get('mp4_crf', 16))
 
+    latent_window_size = int(job_input.get('latent_window_size', 9))
+    cfg = float(job_input.get('cfg', 1.0))
+    rs = float(job_input.get('rs', 0.0))
+
     # --- Clamp values ---
     total_second_length = max(1.0, min(120.0, total_second_length))
     steps = max(1, min(100, steps))
     gs = max(1.0, min(32.0, gs))
     gpu_memory_preservation = max(6.0, min(128.0, gpu_memory_preservation))
     mp4_crf = max(0, min(100, mp4_crf))
+    latent_window_size = max(1, min(100, latent_window_size))
+    cfg = max(0.1, min(20.0, cfg))
+    rs = max(0.0, min(10.0, rs))
 
     try:
         # Decode input image
@@ -384,8 +391,11 @@ def handler(job):
             negative_prompt=negative_prompt,
             seed=seed,
             total_second_length=total_second_length,
+            latent_window_size=latent_window_size,
             steps=steps,
+            cfg=cfg,
             gs=gs,
+            rs=rs,
             gpu_memory_preservation=gpu_memory_preservation,
             use_teacache=use_teacache,
             mp4_crf=mp4_crf,
