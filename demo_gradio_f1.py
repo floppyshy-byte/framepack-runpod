@@ -1,8 +1,4 @@
-from diffusers_helper.hf_login import login
-
 import os
-
-os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 
 import gradio as gr
 import torch
@@ -33,7 +29,34 @@ parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
 parser.add_argument("--port", type=int, required=False)
 parser.add_argument("--inbrowser", action='store_true')
+parser.add_argument("--model-dir", type=str, default=None, help='Path to local model directory (auto-detects RunPod cache if not set)')
 args = parser.parse_args()
+
+
+def resolve_model_dir(explicit_path):
+    """Resolve model directory: explicit path > RunPod HF cache > ./models fallback."""
+    if explicit_path:
+        return os.path.abspath(explicit_path)
+
+    # RunPod Model Cache: look for Floppyshy/framepack-runpod-cache in HF cache
+    hf_cache = os.environ.get('HF_HOME', '/runpod-volume/huggingface-cache')
+    cache_repo_dir = os.path.join(hf_cache, 'hub', 'models--Floppyshy--framepack-runpod-cache')
+    snapshots_dir = os.path.join(cache_repo_dir, 'snapshots')
+
+    if os.path.isdir(snapshots_dir):
+        # Pick the first (usually only) snapshot hash
+        hashes = [d for d in os.listdir(snapshots_dir) if os.path.isdir(os.path.join(snapshots_dir, d))]
+        if hashes:
+            resolved = os.path.join(snapshots_dir, hashes[0])
+            print(f'Found RunPod model cache: {resolved}')
+            return resolved
+
+    # Fallback
+    return os.path.abspath('./models')
+
+
+model_dir = resolve_model_dir(args.model_dir)
+print(f'Model directory: {model_dir}')
 
 # for win desktop probably use --server 127.0.0.1 --inbrowser
 # For linux server probably use --server 127.0.0.1 or do not use any cmd flags
@@ -46,16 +69,16 @@ high_vram = free_mem_gb > 60
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
 
-text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
-text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder_2', torch_dtype=torch.float16).cpu()
-tokenizer = LlamaTokenizerFast.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer')
-tokenizer_2 = CLIPTokenizer.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer_2')
-vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
+text_encoder = LlamaModel.from_pretrained(os.path.join(model_dir, 'HunyuanVideo', 'text_encoder'), torch_dtype=torch.float16, local_files_only=True).cpu()
+text_encoder_2 = CLIPTextModel.from_pretrained(os.path.join(model_dir, 'HunyuanVideo', 'text_encoder_2'), torch_dtype=torch.float16, local_files_only=True).cpu()
+tokenizer = LlamaTokenizerFast.from_pretrained(os.path.join(model_dir, 'HunyuanVideo', 'tokenizer'), local_files_only=True)
+tokenizer_2 = CLIPTokenizer.from_pretrained(os.path.join(model_dir, 'HunyuanVideo', 'tokenizer_2'), local_files_only=True)
+vae = AutoencoderKLHunyuanVideo.from_pretrained(os.path.join(model_dir, 'HunyuanVideo', 'vae'), torch_dtype=torch.float16, local_files_only=True).cpu()
 
-feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
-image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
+feature_extractor = SiglipImageProcessor.from_pretrained(os.path.join(model_dir, 'flux_redux_bfl', 'feature_extractor'), local_files_only=True)
+image_encoder = SiglipVisionModel.from_pretrained(os.path.join(model_dir, 'flux_redux_bfl', 'image_encoder'), torch_dtype=torch.float16, local_files_only=True).cpu()
 
-transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePack_F1_I2V_HY_20250503', torch_dtype=torch.bfloat16).cpu()
+transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(os.path.join(model_dir, 'FramePack_F1_I2V_HY'), torch_dtype=torch.bfloat16, local_files_only=True).cpu()
 
 vae.eval()
 text_encoder.eval()
