@@ -162,7 +162,7 @@ def generate_video(
     gs: float = 10.0,
     rs: float = 0.0,
     gpu_memory_preservation: float = 6.0,
-    use_teacache: bool = True,
+    use_teacache: bool = False,
     mp4_crf: int = 16,
 ) -> str:
     """
@@ -362,7 +362,7 @@ def handler(job):
     steps = int(job_input.get('steps', 25))
     gs = float(job_input.get('gs', 10.0))
     gpu_memory_preservation = float(job_input.get('gpu_memory_preservation', 6.0))
-    use_teacache = bool(job_input.get('use_teacache', True))
+    use_teacache = bool(job_input.get('use_teacache', False))
     mp4_crf = int(job_input.get('mp4_crf', 16))
 
     latent_window_size = int(job_input.get('latent_window_size', 9))
