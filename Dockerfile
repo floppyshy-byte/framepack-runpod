@@ -42,4 +42,4 @@ COPY handler.py .
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/runpod-volume/huggingface-cache
 
-CMD ["python3", "-u", "handler.py"]
+CMD ["python", "-u", "handler.py"]

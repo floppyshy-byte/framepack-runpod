@@ -34,6 +34,7 @@ import sys
 import base64
 import tempfile
 import traceback
+import runpod
 from runpod.serverless.utils import rp_upload
 
 import numpy as np
