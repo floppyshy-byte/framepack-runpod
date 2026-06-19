@@ -95,10 +95,11 @@ from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 
 free_mem_gb = get_cuda_free_memory_gb(gpu)
-high_vram = free_mem_gb > 60
+# Automatically enable high_vram for GPUs with > 14GB free VRAM, or if forced via env var
+high_vram = (free_mem_gb > 14) or (os.environ.get('HIGH_VRAM', '').lower() == 'true')
 
 print(f'Free VRAM {free_mem_gb} GB')
-print(f'High-VRAM Mode: {high_vram}')
+print(f'Default High-VRAM Mode: {high_vram}')
 
 text_encoder = LlamaModel.from_pretrained(os.path.join(model_dir, 'HunyuanVideo', 'text_encoder'), torch_dtype=torch.float16, local_files_only=True).cpu()
 text_encoder_2 = CLIPTextModel.from_pretrained(os.path.join(model_dir, 'HunyuanVideo', 'text_encoder_2'), torch_dtype=torch.float16, local_files_only=True).cpu()
@@ -117,6 +118,10 @@ text_encoder_2.eval()
 image_encoder.eval()
 transformer.eval()
 
+# We will apply slicing/tiling and swapping depending on the dynamic high_vram flag during execution,
+# but for initial load/setup we can configure default states or defer them.
+# To handle payload-level high_vram overrides, we'll implement a helper or dynamically configure.
+# Let's keep the baseline setup flexible.
 if not high_vram:
     vae.enable_slicing()
     vae.enable_tiling()
@@ -166,6 +171,7 @@ def generate_video(
     gpu_memory_preservation: float = 6.0,
     use_teacache: bool = False,
     mp4_crf: int = 16,
+    high_vram_override: bool = False,
 ) -> str:
     """
     Generate a video from an input image and prompt.
@@ -177,14 +183,31 @@ def generate_video(
     job_id = generate_timestamp()
     outputs_folder = tempfile.mkdtemp(prefix='framepack_')
 
+    # Ensure models are appropriately loaded or dynamically offloaded based on runtime flag.
+    # If the user toggled high_vram_override to True, but models are currently wrapped in DynamicSwapInstaller
+    # or offloaded, we make sure they are on GPU.
+    is_hv = high_vram_override
+    print(f"Executing video generation with high_vram = {is_hv}")
+
+    if is_hv:
+        # Move all models to GPU if they aren't already there
+        try:
+            text_encoder.to(gpu)
+            text_encoder_2.to(gpu)
+            image_encoder.to(gpu)
+            vae.to(gpu)
+            transformer.to(gpu)
+        except Exception as e:
+            print(f"Warning: Failed to move all models to GPU for high_vram: {e}")
+
     try:
         # Clean GPU
-        if not high_vram:
+        if not is_hv:
             unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
 
         # Text encoding
         print('Text encoding...')
-        if not high_vram:
+        if not is_hv:
             fake_diffusers_current_device(text_encoder, gpu)
             load_model_as_complete(text_encoder_2, target_device=gpu)
 
@@ -209,14 +232,14 @@ def generate_video(
 
         # VAE encoding
         print('VAE encoding...')
-        if not high_vram:
+        if not is_hv:
             load_model_as_complete(vae, target_device=gpu)
 
         start_latent = vae_encode(input_image_pt, vae)
 
         # CLIP Vision
         print('CLIP Vision encoding...')
-        if not high_vram:
+        if not is_hv:
             load_model_as_complete(image_encoder, target_device=gpu)
 
         image_encoder_output = hf_clip_vision_encode(input_image_np, feature_extractor, image_encoder)
@@ -244,7 +267,7 @@ def generate_video(
         for section_index in range(total_latent_sections):
             print(f'section_index = {section_index}, total_latent_sections = {total_latent_sections}')
 
-            if not high_vram:
+            if not is_hv:
                 unload_complete_models()
                 move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
 
@@ -299,7 +322,7 @@ def generate_video(
             total_generated_latent_frames += int(generated_latents.shape[2])
             history_latents = torch.cat([history_latents, generated_latents.to(history_latents)], dim=2)
 
-            if not high_vram:
+            if not is_hv:
                 offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
                 load_model_as_complete(vae, target_device=gpu)
 
@@ -314,7 +337,7 @@ def generate_video(
                 current_pixels = vae_decode(real_history_latents[:, :, -section_latent_frames:], vae).cpu()
                 history_pixels = soft_append_bcthw(history_pixels, current_pixels, overlapped_frames)
 
-            if not high_vram:
+            if not is_hv:
                 unload_complete_models()
 
             output_filename = os.path.join(outputs_folder, f'{job_id}_{total_generated_latent_frames}.mp4')
@@ -323,7 +346,7 @@ def generate_video(
 
     except Exception:
         traceback.print_exc()
-        if not high_vram:
+        if not is_hv:
             unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae, transformer)
         raise
 
@@ -436,6 +459,13 @@ def handler(job):
     latent_window_size = int(job_input.get('latent_window_size', 9))
     cfg = float(job_input.get('cfg', 1.0))
     rs = float(job_input.get('rs', 0.0))
+    
+    # Allow overriding high_vram per job via "high_vram": true/false
+    payload_high_vram = job_input.get('high_vram')
+    if payload_high_vram is not None:
+        payload_high_vram = bool(payload_high_vram)
+    else:
+        payload_high_vram = high_vram
 
     # --- Clamp values ---
     total_second_length = max(1.0, min(120.0, total_second_length))
@@ -467,6 +497,7 @@ def handler(job):
             gpu_memory_preservation=gpu_memory_preservation,
             use_teacache=use_teacache,
             mp4_crf=mp4_crf,
+            high_vram_override=payload_high_vram,
         )
 
         # Read output video
